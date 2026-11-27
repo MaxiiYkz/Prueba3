@@ -5,21 +5,25 @@
 Además de las rutas de negocio, la app publica métricas para Prometheus en /metrics.
 Las métricas de seguridad (logins fallidos y peticiones sospechosas) se ven en Grafana.
 """
-import hashlib
 import os
 import re
+import secrets
 import sqlite3
 import time
 
 from flask import Flask, Response, g, jsonify, render_template_string, request
+from markupsafe import escape
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
 
-## Clave de la aplicación y credenciales del administrador.
-SECRET_KEY = "SecureDev-2024-clave-super-secreta"
-ADMIN_USUARIO = "admin"
-ADMIN_CLAVE_MD5 = "21232f297a57a5a743894a0e4a801fc3"
+## Clave de la aplicación y credenciales desde variables de entorno (sin secretos hardcodeados).
+SECRET_KEY = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+ADMIN_USUARIO = os.environ.get("ADMIN_USUARIO", "admin")
+ADMIN_CLAVE_HASH = os.environ.get("ADMIN_CLAVE_HASH") or generate_password_hash(
+    os.environ.get("ADMIN_CLAVE", "admin")
+)
 app.config["SECRET_KEY"] = SECRET_KEY
 
 ## Versión desplegada: la inyecta el pipeline (1.0.<build>+<commit>). Sirve para la trazabilidad.
@@ -124,10 +128,15 @@ def antes_de_la_peticion():
 @app.after_request
 def despues_de_la_peticion(respuesta):
     """!
-    @brief Registra la métrica de cada petición atendida.
+    @brief Registra la métrica de cada petición atendida y agrega cabeceras de seguridad HTTP.
     @param respuesta Respuesta que Flask enviará al cliente.
-    @return La misma respuesta.
+    @return La respuesta con cabeceras de seguridad aplicadas.
     """
+    respuesta.headers["X-Content-Type-Options"] = "nosniff"
+    respuesta.headers["X-Frame-Options"] = "DENY"
+    respuesta.headers["Content-Security-Policy"] = "default-src 'self'"
+    respuesta.headers["Referrer-Policy"] = "no-referrer"
+
     endpoint = request.url_rule.rule if request.url_rule else "desconocido"
     if endpoint != "/metrics":
         HTTP_PETICIONES.labels(request.method, endpoint, str(respuesta.status_code)).inc()
@@ -147,10 +156,10 @@ def portada():
 @app.route("/hello")
 def hello():
     """!
-    @brief Saluda al usuario cuyo nombre llega en el parámetro de URL «name».
+    @brief Saluda al usuario cuyo nombre llega en el parámetro de URL «name» (sanitizado contra XSS).
     @return Página HTML con el saludo.
     """
-    name = request.args.get("name", "visitante")
+    name = escape(request.args.get("name", "visitante"))
     return f"<h1>Hola, {name}!</h1>"
 
 
@@ -198,27 +207,30 @@ def obtener_alumno(alumno_id):
 @app.route("/alumnos/buscar")
 def buscar_alumnos():
     """!
-    @brief Busca alumnos cuyo nombre contenga el texto del parámetro «nombre».
+    @brief Busca alumnos cuyo nombre contenga el texto del parámetro «nombre» usando consulta parametrizada.
     @return JSON con los alumnos encontrados.
     """
     nombre = request.args.get("nombre", "")
-    consulta = f"SELECT * FROM alumnos WHERE nombre LIKE '%{nombre}%'"
     try:
-        filas = conectar().execute(consulta).fetchall()
+        filas = conectar().execute(
+            "SELECT * FROM alumnos WHERE nombre LIKE ?",
+            (f"%{nombre}%",),
+        ).fetchall()
     except sqlite3.Error as error:
-        return jsonify({"error": str(error), "consulta": consulta}), 500
+        app.logger.error("Error de base de datos en /alumnos/buscar: %s", error)
+        return jsonify({"error": "Error interno al realizar la búsqueda"}), 500
     return jsonify([dict(f) for f in filas])
 
 
 @app.route("/login", methods=["POST"])
 def login():
     """!
-    @brief Valida las credenciales del administrador enviadas por formulario.
+    @brief Valida las credenciales del administrador usando hash seguro.
     @return JSON con el resultado; 401 si las credenciales no son válidas.
     """
     usuario = request.form.get("usuario", "")
     clave = request.form.get("clave", "")
-    if usuario == ADMIN_USUARIO and hashlib.md5(clave.encode()).hexdigest() == ADMIN_CLAVE_MD5:
+    if usuario == ADMIN_USUARIO and check_password_hash(ADMIN_CLAVE_HASH, clave):
         LOGIN_EXITOSOS.inc()
         return jsonify({"mensaje": "Bienvenido, administrador"})
     LOGIN_FALLIDOS.inc()
@@ -238,4 +250,4 @@ def metrics():
 iniciar_db()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host=os.environ.get("FLASK_HOST", "127.0.0.1"), port=5000, debug=False)
