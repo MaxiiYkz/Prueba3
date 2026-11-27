@@ -71,6 +71,7 @@ PORTADA = """<!doctype html>
 </form>
 <h2>Acceso administrador</h2>
 <form action="/login" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input name="usuario" value="admin"> <input name="clave" type="password" value="">
   <button type="submit">Entrar</button>
 </form>
@@ -129,12 +130,13 @@ def antes_de_la_peticion():
 def despues_de_la_peticion(respuesta):
     """!
     @brief Registra la métrica de cada petición atendida y agrega cabeceras de seguridad HTTP.
-    @param respuesta Respuesta que Flask enviará al cliente.
-    @return La respuesta con cabeceras de seguridad aplicadas.
     """
     respuesta.headers["X-Content-Type-Options"] = "nosniff"
     respuesta.headers["X-Frame-Options"] = "DENY"
-    respuesta.headers["Content-Security-Policy"] = "default-src 'self'"
+    respuesta.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self'; style-src 'self'; "
+        "img-src 'self' data:; frame-ancestors 'none'; form-action 'self'"
+    )
     respuesta.headers["Referrer-Policy"] = "no-referrer"
 
     endpoint = request.url_rule.rule if request.url_rule else "desconocido"
@@ -148,9 +150,14 @@ def despues_de_la_peticion(respuesta):
 def portada():
     """!
     @brief Portada HTML con enlaces y formularios del sistema.
-    @return Página HTML.
     """
-    return render_template_string(PORTADA, version=VERSION)
+    token = secrets.token_urlsafe(24)
+    resp = Response(
+        render_template_string(PORTADA, version=VERSION, csrf_token=token),
+        mimetype="text/html",
+    )
+    resp.set_cookie("csrf_token", token, httponly=True, samesite="Strict")
+    return resp
 
 
 @app.route("/hello")
@@ -226,7 +233,6 @@ def buscar_alumnos():
 def login():
     """!
     @brief Valida las credenciales del administrador usando hash seguro.
-    @return JSON con el resultado; 401 si las credenciales no son válidas.
     """
     usuario = request.form.get("usuario", "")
     clave = request.form.get("clave", "")

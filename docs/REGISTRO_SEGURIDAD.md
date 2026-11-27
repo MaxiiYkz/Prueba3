@@ -32,7 +32,8 @@ y un **commit** (usa el identificador `VULN-xx` en el mensaje del commit).
 
 | Alerta de ZAP | Riesgo | URL de ejemplo | VULN relacionada | Cómo se mitiga | ¿Mitigada? Build |
 |---|---|---|---|---|---|
-| | | | | | |
+| Absence of Anti-CSRF Tokens | Medium | `http://jenkins:5001/` | VULN-09 | Token CSRF y cookie con `SameSite=Strict` en el formulario `/login` | En verificación (#__) |
+| CSP: Failure to Define Directive with No Fallback | Medium | `http://jenkins:5001/` | VULN-08 | Directivas explícitas (`script-src`, `style-src`, `img-src`, `frame-ancestors`, `form-action`) en `Content-Security-Policy` | En verificación (#__) |
 
 ## 4. Monitoreo e incidentes
 
