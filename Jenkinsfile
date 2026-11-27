@@ -67,13 +67,17 @@ pipeline {
 
         stage('DAST - OWASP ZAP') {
             steps {
-                sh '''
-                    docker run --rm --network host \
-                        -v "$(pwd)/reports:/zap/wrk:rw" \
-                        ghcr.io/zaproxy/zaproxy:stable \
-                        zap-baseline.py -t http://127.0.0.1:5001 \
-                        -r zap-report.html -J zap-report.json || true
-                '''
+                script {
+                    def status = sh(
+                        script: 'python3 scripts/zap_scan.py http://jenkins:5001',
+                        returnStatus: true
+                    )
+                    if (status == 2) {
+                        unstable('ZAP encontró alertas High o Medium')
+                    } else if (status != 0) {
+                        error("Error al ejecutar OWASP ZAP (código ${status})")
+                    }
+                }
             }
         }
 
